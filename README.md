@@ -1,6 +1,6 @@
 # Automating Classroom Updates
 
-This project automates Google Classroom updates using a modular multi‑agent workflow. It polls all **ACTIVE** courses you are registered in, detects new events, builds study/assignment artifacts, and keeps a local cache of generated notes and scaffolding code.
+This project automates Google Classroom workflows using a modular multi‑agent system. It polls all **ACTIVE** courses you are registered in, detects new events, generates quiz prep documents and assignment scaffolding, and keeps a local cache of artifacts—boosting productivity by cutting short manual labor.
 
 The workflow is production‑oriented: it uses SQLite for state, a cache directory for artifacts, and a CLI entry point to control runtime behavior.
 

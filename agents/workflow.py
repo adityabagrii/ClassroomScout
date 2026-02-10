@@ -56,6 +56,7 @@ class WFState(BaseModel):
     awaiting_kind: Annotated[Optional[Literal["syllabus"]], keep_last] = None
     awaiting_prompt: Annotated[Optional[str], keep_last] = None
     processed_event_ids: Annotated[List[str], keep_last] = Field(default_factory=list)
+    user_feedback: Annotated[Optional[str], keep_last] = None
 
 
 class Workflow:
@@ -78,6 +79,176 @@ class Workflow:
         if isinstance(rc, str) and rc.strip():
             return rc
         return str(last)
+
+    def _hitl_pending_key(self, course_id: str) -> str:
+        return f"hitl:pending:{course_id}"
+
+    def _hitl_payload_key(self, course_id: str, event_id: str) -> str:
+        return f"hitl:payload:{course_id}:{event_id}"
+
+    def _hitl_state_key(self, course_id: str, event_id: str) -> str:
+        return f"hitl:state:{course_id}:{event_id}"
+
+    def _get_pending_hitl(self, course_id: str) -> List[str]:
+        raw = self.db.get_checkpoint(self._hitl_pending_key(course_id), "[]")
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _set_pending_hitl(self, course_id: str, pending: List[str]) -> None:
+        self.db.set_checkpoint(self._hitl_pending_key(course_id), json.dumps(pending, ensure_ascii=False))
+
+    def _store_hitl_payload(self, course_id: str, event_id: str, payload: Dict[str, Any]) -> None:
+        self.db.set_checkpoint(self._hitl_payload_key(course_id, event_id), json.dumps(payload, ensure_ascii=False))
+
+    def _load_hitl_payload(self, course_id: str, event_id: str) -> Optional[Dict[str, Any]]:
+        raw = self.db.get_checkpoint(self._hitl_payload_key(course_id, event_id), "")
+        if not raw:
+            return None
+        try:
+            obj = json.loads(raw)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+
+    def _clear_hitl_payload(self, course_id: str, event_id: str) -> None:
+        self.db.set_checkpoint(self._hitl_payload_key(course_id, event_id), "")
+
+    def _add_pending_hitl(self, course_id: str, event_id: str, payload: Dict[str, Any]) -> None:
+        pending = self._get_pending_hitl(course_id)
+        if event_id not in pending:
+            pending.append(event_id)
+            self._set_pending_hitl(course_id, pending)
+        self._store_hitl_payload(course_id, event_id, payload)
+
+    def _save_hitl_state(self, course_id: str, event_id: str, state: WFState) -> None:
+        self.db.set_checkpoint(self._hitl_state_key(course_id, event_id), json.dumps(state.model_dump(), ensure_ascii=False))
+
+    def _load_hitl_state(self, course_id: str, event_id: str) -> Optional[WFState]:
+        raw = self.db.get_checkpoint(self._hitl_state_key(course_id, event_id), "")
+        if not raw:
+            return None
+        try:
+            obj = json.loads(raw)
+            if isinstance(obj, dict):
+                return WFState(**obj)
+        except Exception:
+            return None
+        return None
+
+    def _clear_hitl_state(self, course_id: str, event_id: str) -> None:
+        self.db.set_checkpoint(self._hitl_state_key(course_id, event_id), "")
+
+    def _telegram_updates(self) -> List[Dict[str, Any]]:
+        if "telegram_get_updates" not in self.tools:
+            return []
+        offset_key = "telegram:update_offset"
+        offset_raw = self.db.get_checkpoint(offset_key, "0")
+        try:
+            offset = int(offset_raw or "0")
+        except Exception:
+            offset = 0
+        resp = json.loads(self.tools["telegram_get_updates"].invoke({"offset": offset, "timeout": 5}))
+        updates = resp.get("result", []) if isinstance(resp, dict) else []
+        if updates:
+            max_update_id = max(u.get("update_id", 0) for u in updates)
+            self.db.set_checkpoint(offset_key, str(max_update_id + 1))
+        return updates
+
+    def _extract_hitl_reply(self, text: str, event_id: str) -> Optional[str]:
+        token = f"[HITL:{event_id}]"
+        if token not in text:
+            return None
+        return text.split(token, 1)[-1].strip()
+
+    def _parse_feedback(self, text: str) -> Dict[str, Any]:
+        t = text.strip()
+        upper = t.upper()
+        if upper.startswith("ACCEPT") or upper.startswith("APPROVE") or upper == "OK":
+            return {"action": "accept", "feedback": ""}
+        if upper.startswith("FEEDBACK:"):
+            return {"action": "feedback", "feedback": t.split(":", 1)[-1].strip()}
+        if upper.startswith("REGENERATE:"):
+            return {"action": "feedback", "feedback": t.split(":", 1)[-1].strip()}
+        return {"action": "feedback", "feedback": t}
+
+    def _request_feedback(self, course_id: str, event_id: str, task_type: str, pdf_path: str, state: WFState) -> None:
+        token = f"[HITL:{event_id}]"
+        try:
+            self.tools["telegram_send_document"].invoke({"file_path": pdf_path, "caption": f"{task_type} output"})
+        except Exception as e:
+            log_msg(f"telegram.send_document.failed error={e}")
+        prompt = (
+            f"{token}\nReview the PDF above.\n"
+            "Reply with ACCEPT to finalize, or FEEDBACK: <your notes> to regenerate."
+        )
+        try:
+            self.tools["notify_telegram"].invoke({"message": prompt})
+        except Exception as e:
+            log_msg(f"telegram.notify_failed error={e}")
+        self._add_pending_hitl(course_id, event_id, {"kind": "feedback", "task_type": task_type})
+        self._save_hitl_state(course_id, event_id, state)
+
+    def _resolve_hitl(self, state: WFState) -> WFState:
+        pending = self._get_pending_hitl(state.course_id)
+        if not pending:
+            return state
+        updates = self._telegram_updates()
+        if not updates:
+            return state
+
+        for ev_id in list(pending):
+            payload = self._load_hitl_payload(state.course_id, ev_id) or {}
+            kind = payload.get("kind")
+            for u in updates:
+                msg = u.get("message") or {}
+                text = msg.get("text") or ""
+                reply = self._extract_hitl_reply(text, ev_id)
+                if not reply:
+                    continue
+
+                if kind == "syllabus":
+                    state.topics_query = reply[:800]
+                    state.current_event_id = ev_id
+                    state.new_event_ids = [ev_id]
+                    state.debug["force_task_type"] = "quiz_flow"
+                    state.debug["from_hitl_syllabus"] = True
+                    state.awaiting_user = False
+                    state.awaiting_kind = None
+                    state.awaiting_prompt = None
+
+                elif kind == "feedback":
+                    saved = self._load_hitl_state(state.course_id, ev_id)
+                    if saved:
+                        state = saved
+                    fb = self._parse_feedback(reply)
+                    if fb["action"] == "accept":
+                        try:
+                            self.tools["notify_telegram"].invoke({"message": f"[HITL:{ev_id}] Accepted."})
+                        except Exception as e:
+                            log_msg(f"telegram.notify_failed error={e}")
+                        self._clear_hitl_state(state.course_id, ev_id)
+                    else:
+                        state.user_feedback = fb["feedback"]
+                        state.debug["force_task_type"] = payload.get("task_type", "")
+                        state.current_event_id = ev_id
+                        state.new_event_ids = [ev_id]
+                        state.debug["from_feedback"] = True
+                        try:
+                            self.tools["notify_telegram"].invoke(
+                                {"message": f"[HITL:{ev_id}] Feedback received. Regenerating..."}
+                            )
+                        except Exception as e:
+                            log_msg(f"telegram.notify_failed error={e}")
+
+                pending.remove(ev_id)
+                self._set_pending_hitl(state.course_id, pending)
+                self._clear_hitl_payload(state.course_id, ev_id)
+                return state
+
+        return state
 
     def parse_due_date(self, ev: dict):
         due = ev.get("dueDate")
@@ -106,6 +277,7 @@ class Workflow:
         }
 
     def poller_node(self, state: WFState) -> WFState:
+        state = self._resolve_hitl(state)
         ck_key = f"poll:last_ts:{state.course_id}"
         last_ts = int(self.db.get_checkpoint(ck_key, "0") or "0")
 
@@ -121,7 +293,11 @@ class Workflow:
             self.db.upsert_event(state.course_id, "material", m)
 
         recent = self.db.get_recent_events(state.course_id, last_ts + 1)
-        state.new_event_ids = [r["event_id"] for r in recent]
+        recent_ids = [r["event_id"] for r in recent]
+        if state.debug.get("force_task_type") and state.current_event_id:
+            if state.current_event_id not in recent_ids:
+                recent_ids.insert(0, state.current_event_id)
+        state.new_event_ids = recent_ids
         self.db.set_checkpoint(ck_key, str(now_ts()))
 
         log_msg(f"poller.done course_id={state.course_id} new_events={len(state.new_event_ids)}")
@@ -129,6 +305,9 @@ class Workflow:
         return state
 
     def router_node(self, state: WFState) -> WFState:
+        if state.debug.get("force_task_type") and state.current_event_id:
+            state.task_type = state.debug.get("force_task_type")
+            return state
         if not state.new_event_ids:
             state.task_type = "no_op"
             return state
@@ -192,6 +371,12 @@ class Workflow:
             state.task_type = "no_op"
             return state
 
+        if state.debug.get("from_hitl_syllabus") and state.topics_query:
+            state.awaiting_user = False
+            state.awaiting_kind = None
+            state.awaiting_prompt = None
+            return state
+
         ctx = self.minimal_event_context(ev)
 
         since = now_ts() - int(48 * 3600)
@@ -207,23 +392,28 @@ class Workflow:
         state.debug["syllabus_extractor"] = obj
 
         if obj.get("syllabus") == "missing":
-            if self.settings.allow_hitl:
-                state.awaiting_user = True
-                state.awaiting_kind = "syllabus"
-                state.awaiting_prompt = (
-                    "Syllabus missing for quiz event:\n"
-                    f"- Title: {ctx['title']}\n\n"
-                    "Paste syllabus/topics (comma separated or multiline):"
-                )
-                log_msg(f"syllabus.missing.hitl event_id={state.current_event_id}")
-                return state
-            else:
-                state.topics_query = ctx["title"][:200]
-                state.awaiting_user = False
-                state.awaiting_kind = None
-                state.awaiting_prompt = None
-                log_msg("syllabus.missing.noninteractive using title as topics")
-                return state
+            token = f"[HITL:{state.current_event_id}]"
+            prompt = (
+                f"{token}\nSyllabus missing for quiz event:\n"
+                f"- Title: {ctx['title']}\n\n"
+                "Reply with syllabus/topics (comma separated or multiline)."
+            )
+            try:
+                self.tools["notify_telegram"].invoke({"message": prompt})
+            except Exception as e:
+                log_msg(f"syllabus.missing.notify_failed error={e}")
+
+            self._add_pending_hitl(
+                state.course_id,
+                state.current_event_id,
+                {"kind": "syllabus", "task_type": "quiz_flow"},
+            )
+            state.awaiting_user = True
+            state.awaiting_kind = "syllabus"
+            state.awaiting_prompt = prompt
+            state.debug["awaiting_hitl"] = True
+            log_msg(f"syllabus.missing.hitl event_id={state.current_event_id}")
+            return state
 
         topics = obj.get("topics", [])
         if isinstance(topics, list) and topics:
@@ -479,6 +669,7 @@ class Workflow:
             text=ctx.get("text", ""),
             requirements=", ".join(reqs)[:800],
             deliverables=", ".join(dels)[:800],
+            feedback=state.user_feedback or "",
         )
         result = self.agents["outline_agent"].invoke({"messages": [{"role": "user", "content": prompt}]})
         raw = self._agent_last_text(result)
@@ -548,7 +739,7 @@ class Workflow:
 
         expanded = []
         for t in topics:
-            prompt = QUIZ_TOPIC_EXPAND_PROMPT.format(topic=t, context=context)
+            prompt = QUIZ_TOPIC_EXPAND_PROMPT.format(topic=t, context=context, feedback=state.user_feedback or "")
             res = self.agents["quiz_topic_agent"].invoke({"messages": [{"role": "user", "content": prompt}]})
             raw = self._agent_last_text(res)
             obj = extract_json_block(raw) or {}
@@ -583,7 +774,7 @@ class Workflow:
 
         explanations = []
         for s in subtopics:
-            prompt = QUIZ_SUBTOPIC_EXPLAIN_PROMPT.format(subtopic=s, context=context)
+            prompt = QUIZ_SUBTOPIC_EXPLAIN_PROMPT.format(subtopic=s, context=context, feedback=state.user_feedback or "")
             res = self.agents["quiz_topic_agent"].invoke({"messages": [{"role": "user", "content": prompt}]})
             raw = self._agent_last_text(res)
             obj = extract_json_block(raw) or {}
@@ -751,6 +942,7 @@ class Workflow:
         if ok and os.path.exists(pdf_path):
             state.debug["doc_writer"] = {"md_path": md_path, "pdf_path": pdf_path}
             log_msg(f"doc.created local_md={md_path} local_pdf={pdf_path}")
+            self._request_feedback(state.course_id, state.current_event_id, "quiz", pdf_path, state)
         else:
             log_msg("doc.create.failed")
         return state
@@ -825,6 +1017,7 @@ class Workflow:
         if ok and os.path.exists(pdf_path):
             state.debug["doc_writer"] = {"md_path": md_path, "pdf_path": pdf_path}
             log_msg(f"doc.created local_md={md_path} local_pdf={pdf_path}")
+            self._request_feedback(state.course_id, state.current_event_id, "assignment", pdf_path, state)
         else:
             log_msg("doc.create.failed")
 
@@ -900,7 +1093,7 @@ class Workflow:
         raw = self._agent_last_text(result)
         obj = extract_json_block(raw) or {}
         if nonempty(obj.get("digest")):
-            self.tools["notify_whatsapp"].invoke({"message": "Digest:\n" + obj["digest"][:1200]})
+            self.tools["notify_telegram"].invoke({"message": "Digest:\n" + obj["digest"][:1200]})
 
         state.debug["digest"] = obj
         log_msg(f"digest.done highlights={(obj.get('highlights') or [])[:6]}")
@@ -919,7 +1112,7 @@ class Workflow:
         return state.task_type or "no_op"
 
     def route_after_syllabus(self, state: WFState) -> str:
-        return "need_user" if state.awaiting_user else "have_syllabus"
+        return "awaiting" if state.awaiting_user else "have_syllabus"
 
     def route_after_advance(self, state: WFState) -> str:
         return "more" if state.new_event_ids else "done"
@@ -938,6 +1131,7 @@ class Workflow:
         graph.add_node("quiz_detector", self.quiz_detector_node)
         graph.add_node("syllabus_extractor", self.syllabus_extractor_node)
         graph.add_node("hitl_syllabus", self.human_input_syllabus_node)
+        graph.add_node("awaiting", lambda s: s)
 
         graph.add_node("assignment_analyzer", self.assignment_analyzer_node)
         graph.add_node("retrieval", self.retrieval_node)
@@ -974,7 +1168,7 @@ class Workflow:
         graph.add_conditional_edges(
             "syllabus_extractor",
             self.route_after_syllabus,
-            {"need_user": "hitl_syllabus", "have_syllabus": "retrieval"},
+            {"awaiting": "awaiting", "have_syllabus": "retrieval"},
         )
         graph.add_edge("hitl_syllabus", "retrieval")
         graph.add_edge("retrieval", "ensure_summaries")
@@ -998,6 +1192,7 @@ class Workflow:
         graph.add_edge("codegen", "advance")
 
         graph.add_edge("digest", "advance")
+        graph.add_edge("awaiting", END)
 
         graph.add_conditional_edges(
             "advance",

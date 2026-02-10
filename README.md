@@ -17,6 +17,23 @@ Designed for reliability and extensibility, ClassroomScout persists long-term st
 - Tracks already seen events to avoid duplicate processing.
 - Runs continuously in the background on a fixed interval (default 3.5 hours).
 
+## Flow Details
+
+**Quiz Flow**
+- Detects quiz events and extracts or requests the syllabus.
+- Expands each topic into subtopics + learning objectives.
+- Generates detailed subtopic explanations with examples and key points.
+- Produces 15–20 conceptual questions and 5–10 numerical questions.
+- Builds a PDF study pack and sends it to Telegram for review.
+- HITL: reply with `ACCEPT` or `FEEDBACK: <notes>` to regenerate with your guidance.
+
+**Assignment Flow**
+- Analyzes requirements and deliverables.
+- Builds an outline and step-by-step plan with guidance.
+- Generates a detailed PDF and a starter code scaffold.
+- Sends the PDF to Telegram for review.
+- HITL: reply with `ACCEPT` or `FEEDBACK: <notes>` to regenerate from the outline step.
+
 ## Project Layout
 
 - `main.py`
@@ -55,7 +72,18 @@ pip install -r requirements.txt
 - Place `credentials.json` in the project root.
 - The first run will open a browser for OAuth and create `token.json`.
 
-### 4) Optional: Ensure PDF rendering support
+### 4) Set-up NVIDIA NIM API Key
+1. Create or sign in to your NVIDIA account.
+2. Open the NVIDIA NIM portal and generate a new API key.
+3. Copy the key and store it securely.
+
+#### Set Your NVIDIA API Key
+Export the key in your terminal so the CLI can read it:
+```bash
+export NVIDIA_API_KEY="YOUR_KEY_HERE"
+```
+
+### 5) Optional: Ensure PDF rendering support
 
 PDF generation uses Pandoc + XeLaTeX. Install if you want PDFs.
 
@@ -65,6 +93,15 @@ brew install pandoc mactex
 ```
 
 If Pandoc is missing, the workflow will still run but PDF generation may fail.
+
+### 6) Configure Telegram (for updates + HITL)
+
+Set environment variables:
+
+```bash
+export TELEGRAM_BOT_TOKEN="YOUR_BOT_TOKEN"
+export TELEGRAM_CHAT_ID="YOUR_CHAT_ID"
+```
 
 ## Usage
 
@@ -110,10 +147,12 @@ nohup python main.py > classroom.log 2>&1 &
 - `--allow-hitl` enable interactive input if syllabus is missing
 - `--model` LLM model name
 - `--list-courses` list active courses and exit
+- `--telegram-bot-token` Telegram bot token (or use `TELEGRAM_BOT_TOKEN`)
+- `--telegram-chat-id` Telegram chat ID (or use `TELEGRAM_CHAT_ID`)
 
 ## Output Artifacts
 
-All generated artifacts are stored in the cache directory (default: `cache_files/`).
+All generated artifacts are stored per course in `artifacts_<course_name>/`.
 
 - Quiz flow:
   - `*_quiz.md`, `*_quiz.pdf`
@@ -126,7 +165,7 @@ All generated artifacts are stored in the cache directory (default: `cache_files
 
 ### Polling & Deduplication
 
-Each course uses a per‑course checkpoint key (e.g., `poll:last_ts:<course_id>`). New events are only processed once and stored in the local SQLite DB.
+Each course uses a per‑course checkpoint key (e.g., `poll:last_ts:<course_id>`). New events are only processed once and stored in a per‑course SQLite DB named `<course_name>_db.sqlite`.
 
 ### Quiz Flow Improvements
 
@@ -147,6 +186,7 @@ Each course uses a per‑course checkpoint key (e.g., `poll:last_ts:<course_id>`
 ## Notes
 
 - The workflow uses `langchain-nvidia-ai-endpoints`. Ensure your environment is configured to access the model.
+- Telegram support requires setting `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, or passing `--telegram-bot-token` and `--telegram-chat-id`.
 - If you want to disable PDF generation entirely, remove Pandoc or stub `render_markdown_to_pdf` in `agents/tools.py`.
 
 ## Quick Start

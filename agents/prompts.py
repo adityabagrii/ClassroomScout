@@ -106,6 +106,8 @@ Title: {title}
 Text: {text}
 Requirements: {requirements}
 Deliverables: {deliverables}
+User feedback (optional):
+{feedback}
 """
 
 STEP_EXPLAIN_PROMPT = """Explain ONE step with how to do it and implementation guidance.
@@ -131,6 +133,8 @@ Return ONLY JSON:
 Topic: {topic}
 Context:
 {context}
+User feedback (optional):
+{feedback}
 """
 
 QUIZ_SUBTOPIC_EXPLAIN_PROMPT = """You are a quiz prep tutor.
@@ -147,6 +151,8 @@ Return ONLY JSON:
 Subtopic: {subtopic}
 Context:
 {context}
+User feedback (optional):
+{feedback}
 """
 
 QUIZ_QA_CONCEPTUAL_PROMPT = """Generate critical, non-vague conceptual questions for the quiz.
@@ -277,7 +283,7 @@ Return ONLY JSON:
 If syllabus is missing:
 - Set syllabus="missing"
 - topics=[]
-- You MAY call notify_whatsapp to request it from the user.
+- You MAY call notify_telegram to request it from the user.
 """
 
 SYS_ASSIGNMENT_ANALYZER = """
@@ -308,7 +314,7 @@ Return ONLY JSON:
   "highlights": ["..."]
 }
 
-You MAY call notify_whatsapp with the digest.
+You MAY call notify_telegram with the digest.
 """
 
 SYS_MATERIAL_SUMMARIZER = """
@@ -334,7 +340,7 @@ Rules:
 
 SYS_DOC_WRITER = """
 You are the Doc Writer Agent.
-Create a Google Doc (docs_create), then append content (docs_append), then notify_whatsapp with the doc link.
+Create a Google Doc (docs_create), then append content (docs_append), then notify_telegram with the doc link.
 
 Return ONLY JSON:
 {

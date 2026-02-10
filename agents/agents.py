@@ -51,7 +51,7 @@ def build_agents(model_name: str, tools: dict):
     syllabus_extractor_agent = make_json_agent(
         name="syllabus_extractor_agent",
         model=llm,
-        tools=[tools["db_get_event"], tools["db_get_recent_events"], tools["notify_whatsapp"]],
+        tools=[tools["db_get_event"], tools["db_get_recent_events"], tools["notify_telegram"]],
         system_text=SYS_SYLLABUS_EXTRACTOR,
         debug=False,
     )
@@ -67,7 +67,7 @@ def build_agents(model_name: str, tools: dict):
     digest_agent = make_json_agent(
         name="digest_agent",
         model=llm,
-        tools=[tools["db_get_recent_events"], tools["notify_whatsapp"]],
+        tools=[tools["db_get_recent_events"], tools["notify_telegram"]],
         system_text=SYS_DIGEST,
         debug=False,
     )
@@ -83,7 +83,7 @@ def build_agents(model_name: str, tools: dict):
     doc_writer_agent = make_json_agent(
         name="doc_writer_agent",
         model=llm,
-        tools=[tools["db_get_event"], tools["docs_create"], tools["docs_append"], tools["notify_whatsapp"]],
+        tools=[tools["db_get_event"], tools["docs_create"], tools["docs_append"], tools["notify_telegram"]],
         system_text=SYS_DOC_WRITER,
         debug=False,
     )

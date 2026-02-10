@@ -4,5 +4,8 @@ scripts/__pycache__/
 agents/__pycache__/
 credentials.json
 token.json
+artifacts_*/
+*_db.sqlite
 agentic-flow.ipynb
 agentic-flow.py
+classroom_agent.sqlite

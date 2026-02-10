@@ -1,5 +1,6 @@
 import argparse
 import re
+import os
 from pathlib import Path
 
 from agents.auth import get_creds, build_clients
@@ -24,6 +25,8 @@ def parse_args():
     p.add_argument("--allow-hitl", action="store_true", help="Allow interactive input for missing syllabus")
     p.add_argument("--model", default="nvidia/llama-3.1-nemotron-ultra-253b-v1", help="LLM model name")
     p.add_argument("--list-courses", action="store_true", help="List ACTIVE courses and exit")
+    p.add_argument("--telegram-bot-token", default=None, help="Telegram bot token (or set TELEGRAM_BOT_TOKEN)")
+    p.add_argument("--telegram-chat-id", default=None, help="Telegram chat id (or set TELEGRAM_CHAT_ID)")
     return p.parse_args()
 
 
@@ -56,6 +59,8 @@ def main():
         poll_hours=args.poll_hours,
         allow_hitl=args.allow_hitl,
         nemotron_model=args.model,
+        telegram_bot_token=args.telegram_bot_token or os.getenv("TELEGRAM_BOT_TOKEN"),
+        telegram_chat_id=args.telegram_chat_id or os.getenv("TELEGRAM_CHAT_ID"),
     )
 
     settings.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -96,8 +101,6 @@ def main():
         db = DB(str(course_db_path))
         db.init()
 
-        tools, allowed_mimes = build_tools(classroom, drive, docs, db, str(course_cache))
-        agents = build_agents(settings.nemotron_model, tools)
         course_settings = Settings(
             credentials_path=settings.credentials_path,
             token_path=settings.token_path,
@@ -116,7 +119,19 @@ def main():
             nemotron_model=settings.nemotron_model,
             poll_hours=settings.poll_hours,
             allow_hitl=settings.allow_hitl,
+            telegram_bot_token=settings.telegram_bot_token,
+            telegram_chat_id=settings.telegram_chat_id,
         )
+        tools, allowed_mimes = build_tools(
+            classroom,
+            drive,
+            docs,
+            db,
+            str(course_cache),
+            telegram_bot_token=course_settings.telegram_bot_token,
+            telegram_chat_id=course_settings.telegram_chat_id,
+        )
+        agents = build_agents(settings.nemotron_model, tools)
         wf = Workflow(course_settings, db, tools, agents, allowed_mimes)
         app = wf.build_graph()
         return app

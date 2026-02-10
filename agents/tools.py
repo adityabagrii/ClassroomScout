@@ -1,9 +1,10 @@
 import io
 import os
 import textwrap
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pypandoc
+import requests
 from langchain_core.tools import tool
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from pypdf import PdfReader
@@ -35,7 +36,7 @@ def paginate_list(call_fn, key: str, page_size: int) -> List[Dict[str, Any]]:
     return out
 
 
-def build_tools(classroom, drive, docs, db, cache_dir: str):
+def build_tools(classroom, drive, docs, db, cache_dir: str, telegram_bot_token: Optional[str] = None, telegram_chat_id: Optional[str] = None):
     @tool
     def classroom_list_courses(page_size: int = 100, course_states: str = "ACTIVE") -> str:
         """List courses. Returns JSON string."""
@@ -181,11 +182,48 @@ def build_tools(classroom, drive, docs, db, cache_dir: str):
         docs.documents().batchUpdate(documentId=document_id, body={"requests": reqs}).execute()
         return __import__("json").dumps({"ok": True}, ensure_ascii=False)
 
+    def _tg_api_url(method: str) -> str:
+        if not telegram_bot_token:
+            raise RuntimeError("Missing TELEGRAM_BOT_TOKEN")
+        return f"https://api.telegram.org/bot{telegram_bot_token}/{method}"
+
+    def _tg_chat_id() -> str:
+        if not telegram_chat_id:
+            raise RuntimeError("Missing TELEGRAM_CHAT_ID")
+        return str(telegram_chat_id)
+
     @tool
-    def notify_whatsapp(message: str) -> str:
-        """Notify user via WhatsApp (stub). Returns JSON string."""
-        log_msg(f"notify.whatsapp message={message[:900]}")
-        return __import__("json").dumps({"ok": True}, ensure_ascii=False)
+    def notify_telegram(message: str) -> str:
+        """Send a Telegram message. Returns JSON string."""
+        try:
+            resp = requests.post(_tg_api_url("sendMessage"), json={"chat_id": _tg_chat_id(), "text": message})
+            return __import__("json").dumps(resp.json(), ensure_ascii=False)
+        except Exception as e:
+            log_msg(f"notify.telegram.failed error={e}")
+            return __import__("json").dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @tool
+    def telegram_send_document(file_path: str, caption: str = "") -> str:
+        """Send a document to Telegram. Returns JSON string."""
+        try:
+            with open(file_path, "rb") as f:
+                files = {"document": f}
+                data = {"chat_id": _tg_chat_id(), "caption": caption or ""}
+                resp = requests.post(_tg_api_url("sendDocument"), data=data, files=files)
+            return __import__("json").dumps(resp.json(), ensure_ascii=False)
+        except Exception as e:
+            log_msg(f"telegram.send_document.failed error={e}")
+            return __import__("json").dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @tool
+    def telegram_get_updates(offset: int = 0, timeout: int = 5) -> str:
+        """Fetch Telegram updates. Returns JSON string."""
+        try:
+            resp = requests.get(_tg_api_url("getUpdates"), params={"offset": offset, "timeout": timeout})
+            return __import__("json").dumps(resp.json(), ensure_ascii=False)
+        except Exception as e:
+            log_msg(f"telegram.get_updates.failed error={e}")
+            return __import__("json").dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
 
     @tool
     def drive_upload(file_path: str, mime_type: str = "application/pdf", name: str = None) -> str:
@@ -258,7 +296,9 @@ def build_tools(classroom, drive, docs, db, cache_dir: str):
         "file_count_and_extract": file_count_and_extract,
         "docs_create": docs_create,
         "docs_append": docs_append,
-        "notify_whatsapp": notify_whatsapp,
+        "notify_telegram": notify_telegram,
+        "telegram_send_document": telegram_send_document,
+        "telegram_get_updates": telegram_get_updates,
         "drive_upload": drive_upload,
         "render_markdown_to_pdf": render_markdown_to_pdf,
         "safe_cache_path_for_drive": safe_cache_path_for_drive,

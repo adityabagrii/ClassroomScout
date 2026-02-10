@@ -38,3 +38,7 @@ class Settings:
     # runtime
     poll_hours: float = 3.5
     allow_hitl: bool = False
+
+    # telegram
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None

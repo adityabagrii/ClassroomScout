@@ -1,0 +1,6 @@
+__pycache__/
+cache_files/
+scripts/__pycache__/
+agents/__pycache__/
+credentials.json/
+token.json/

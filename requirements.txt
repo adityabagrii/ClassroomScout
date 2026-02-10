@@ -1,0 +1,17 @@
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+pydantic
+tenacity
+langgraph
+langchain
+langchain-core
+langchain-nvidia-ai-endpoints
+sentence-transformers
+scikit-learn
+pypdf
+python-pptx
+python-docx
+pypandoc
+requests

@@ -1,8 +1,10 @@
-# Automating Classroom Updates
+# ClassroomScout - Automating Your Study
 
-This project automates Google Classroom workflows using a modular multi‑agent system. It polls all **ACTIVE** courses you are registered in, detects new events, generates quiz prep documents and assignment scaffolding, and keeps a local cache of artifacts—boosting productivity by cutting short manual labor.
+ClassroomScout is a production-grade automation system for Google Classroom that continuously monitors all ACTIVE courses you’re enrolled in, detects important updates, and transforms raw classroom activity into structured, actionable study artifacts.
 
-The workflow is production‑oriented: it uses SQLite for state, a cache directory for artifacts, and a CLI entry point to control runtime behavior.
+Instead of manually tracking announcements, quizzes, and assignments, ClassroomScout uses a modular multi-agent workflow to triage new events, retrieve relevant materials, generate deep quiz preparation notes, create critical practice questions, and scaffold assignment code—automatically and in the background.
+
+Designed for reliability and extensibility, ClassroomScout persists long-term state in SQLite, caches artifacts locally, and exposes a CLI for fine-grained control over execution. The result is an always-running academic companion that reduces cognitive overhead and lets you focus on learning rather than logistics.
 
 ## What It Does
 
